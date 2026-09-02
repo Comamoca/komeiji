@@ -1,0 +1,184 @@
+#+TITLE: komeiji 調査報告 — satori-html モダンリライト
+#+AUTHOR: Sisyphus (OpenCode / ulw-research)
+#+DATE: 2026-09-02
+#+LANGUAGE: ja
+
+* 概要
+
+- 実行モード: ulw-research（飽和調査 + 実行による検証 + 実装）
+- Workers: 6（librarian x5 + 実証 shootout、実装は lead が担当）
+- Waves: 2 + ローカル wave-0 / Excursions: 0
+- ソース: 40+（npm, GitHub, GitHub API, jsr.io, unpkg, grep.app, bundlephobia / opensrc 一次ソース: satori-html@0.3.2, satori@0.33.4, ultrahtml@1.7.0）
+- 検証: 実証 shootout 1 式 + テスト 64 本（ゴールデンレンダリング比較含む）
+- 経過時間: 62 分
+- セッション: =.omo/ulw-research/20260902-210615/=
+- 配信後のステアリング 2 件（satori-html 依存の完全排除 / renovate・tagpr 導入）を反映済み
+
+** エグゼクティブサマリー
+
+satori-html は 2022-12 を最後にリリースがなく（最終 commit 2025-04 は依存更新のみ）、14 個の open issue を抱えたまま ~130K weekly downloads で使われ続けている。実証の結果、satori-html@0.3.2 は **Bun 上ですべての入力でクラッシュする**（useObjectSyntax 時に常時注入される =:where([style])= セレクタが bundled parsel をクラッシュさせる）ことが判明し、rewrite の必要性は決定的。唯一の活動的な fork（@xevion/satori-html）は Bun 問題を回避する代わりに =url(a;b.png)= パースをリグレッションさせている。
+
+komeiji は htmlparser2 + css-select + css-what + style-to-object を採用（実装案 A–E 比較の結果 B）。komeiji 自身のコードは ~300 行（最大ファイル 95 LOC）で、parser correctness の長尾リスクを実績ある実装に委譲する。テスト 64 本（上流互換 + 改善分 + satori-html リファレンスから取得したゴールデン SVG とのバイト等価比較）がすべてグリーン。
+
+** 成果物
+
+| パス | 内容 |
+|---|---|
+| =src/= | html / tree / inline / style / specificity / tw / types / index（8 ファイル） |
+| =test/= | html.test.ts(26) + tw.test.ts(30) + svg.test.ts(4 ゴールデン) |
+| =examples/og-image.ts | HTML → SVG 実行サンプル（=bun run example=） |
+| =renovate.json | hinoto 準拠（minor 7 日保持 + platformAutomerge） |
+| =docs/tagpr.md | tagpr 導入手順書 |
+| =README.md | 使用法・デビエーション・開発手順 |
+
+* 調査軸別の発見
+
+** 軸 1: satori 要素契約（satori@0.33.4 一次ソース + librarian 交叉確認）
+
+- プレーンオブジェクト ={type, props}= を受理。=isReactElement= はプリミティブ除外のみで =$$typeof= を要求しない（src/utils.ts）
+- children は =props.children=。=normalizeChildren= が =flat(Infinity)=、null/undefined/boolean を drop、数値を文字列化、隣接文字列を連結 → **children 配列の undefined ホールは satori が drop する**
+- HTML 要素で =class= / =className= は無効。消費されるのは =style= / =children= / =tw= / =lang=（src/layout.ts）。=props.tw= は twrnc 経由でネイティブ Tailwind 処理
+- style は camelCase が標準。kebab-case も css-to-react-native の =camelizeStyleName= 経由で許容
+- satori 本体は HTML entity をデコードしない → tree provider の責務（satori-html#20 で確認）
+- タグ whitelist なし（未知タグ = 汎用 flex）。=img= は特別扱い、=\<text\>= は throw
+
+** 軸 2: HTML パーサー状況（2026）
+
+| パーサー | ver | DL/週 | transitive deps | 実装 | entity 解決 |
+|---|---|---|---|---|---|
+| parse5 | 8.0.1 (2026-04) | 153.9M | 1 | full WHATWG | ○ |
+| htmlparser2 | 12.0.0 (2026-03) | 95M | 5 | forgiving, v12 で spec-aligned | ○ |
+| node-html-parser | 9.0.2 | 9.2M | 10 | 簡易 DOM（malformed 不可を maintainer 認める） | ○ |
+| linkedom | 0.18.13 | 5.1M | 17 | DOM-like（htmlparser2 ベース） | ○ |
+| ultrahtml | 1.7.0 (2026-07) | 6.8M | 0 | regex、HTML-like | **×** |
+| happy-dom | 20.13.1 | 15.9M | 7 | 独自 regex + フル DOM | ○ |
+| himalaya | 1.1.1 | - | 0 | attributes が配列 API | × |
+
+- ultrahtml は node shape = ={type 0-4, name, attributes, children, value, parent, loc}=。void/raw(script,style)/comment/doctype/自己閉じ対応、CDATA・foreign content・adoption-agency 非対応
+- ハンドロール評価: entity 2231 種（longest-match / legacy 形式）、void 要素 14 種、foreign content の case adjustment、raw-text 状態機械 — 純 tokenizer は tree-construction なしでは html5lib-tests を通せない。ゼロ依存の先例: justjshtml（~9k LOC で 9k+ テスト pass）
+
+** 軸 3: 先行事例・fork
+
+- satori-html 休眠: 最終リリース 0.3.2（2022-12-12）、最終 commit 2025-04-04（依存更新のみ）、14 open issues、~130–145K DL/週、35–41 dependents → **rewrite 正当化**
+- 唯一の活動的 fork: @xevion/satori-html（2026-01, v0.4.1, ultrahtml ^1.6.0）。Bun クラッシュ回避のため =useObjectSyntax= を廃止したが **=url(a;b.png)= を =url(a= に壊すリグレッション**（実証）
+- @vue-email/satori-html は放棄（repo 404）。svelte-h2j は Svelte compiler ベース、v-satori は satori-html ラッパ
+- nuxt-og-image は自前 Vite pipeline（satori-html 不使用）。Cloudflare: workers-og（HTMLRewriter）/ cf-workers-og（htmlparser2 + style-to-js）
+- 実 dependents: valibot, analog, svelte.dev, midu.dev, openapi.tools, syncpack
+- vercel/satori#558: Vercel maintainer「HTML パースは別パッケージの仕事」— satori-html 存在意義の一次裏付け
+
+** 軸 4: style 文字列 → camelCase オブジェクト
+
+- style-to-object v2.0.2（2026-07, 45.9M DL/週, dep = inline-style-parser のみ）: kebab キーで出力（camel 化しない）。=top:= / =:12px= / =;= → null、=top= / =/*= は **throw** → ガード必須。url() 内セミコロン対応は 2026-07 に修正済み
+- style-to-js は camelCase 層（CUSTOM_PROPERTY_REGEX で =--x= 保護、reactCompat で vendor prefix 処理）— komeiji では採用せず自前 12 行 camelize（throw ガード + lowercase + custom prop 保護を統合するため）
+- satori-html の naive camelize: custom property 保護なし（=--x= → =-X= 腐敗、実証 3 重確認）、-ms 特例なし
+- 手書き split(';') の失敗例: cheerio#5410（data URI）、svelte#9637、reworkcss/css#67/#137。正しい手書きは quote/paren 追跡スキャナ（nuxt og-image =splitCssDeclarations=）
+
+** 軸 5: 足場（Comamoca ハウススタイル + 2026 スタック）
+
+- Comamoca: TS lib は Deno ネイティブ（kido を JSR 公開）、新規は Gleam 推し（hinoto/node-pg）、Nix flake + direnv、JS は pnpm、MIT、EN 主力バイリンガル README、renovate、CLAUDE.md
+- 2026 コンセンサス: tsdown（tsup は事実上停止）または plain tsc / vitest / Biome / ESM-only OK / exports types-first / publint+attw / changesets / JSR 併売
+- komeiji の選択: Bun 指示 + npm エコシステム互換を優先し =tsc + bun test + ESM-only=（vitest も biome も排除、テストは =bun:test=）
+
+** 軸 0（ローカル）: satori-html / ultrahtml ソース解析
+
+- satori-html 実装は 138 行: =parse(trim(html))= → ultrahtml =inlineCSS({useObjectSyntax:true})= → tw ヒューリスティック → walk → VNode
+- ルートは常に ={div, style:{display:flex, flexDirection:column, width:100%, height:100%}}= で包む
+- ultrahtml 1.7.0 は dist に parsel（selector 用）+ stylis + media-query-fns（inline 用）を bundle — 「1 dep」の見かけに注意
+
+* 実証検証結果（Phase 3: 実行による検証）
+
+環境: /tmp/opencode/komeiji-shootout（bun 1.3.13 / node 24.19）+ リポジトリ内テスト
+
+| # | 主張 | verdict | 証跡 |
+|---|---|---|---|
+| 1 | satori-html@0.3.2 は Bun で全入力クラッシュ | CONFIRMED | stack: =selector.js createMatch= ← =inline.ts:14 :where([style])= ← bundled parsel。node では正常 |
+| 2 | =--x: 1= → ={\"-X\":\"1\"}= 腐敗 | CONFIRMED | リファレンス実出力（3 重確認） |
+| 3 | entity 未解決（#20） | CONFIRMED | =<p>A &amp; B</p>= → ="A &amp; B"= リテラル |
+| 4 | Xevion fork の url() リグレッション | CONFIRMED | ={backgroundImage:"url(a"}= |
+| 5 | stylis の =!important= 空白喰い（=red!important=） | CONFIRMED | リファレンス実出力 |
+| 6 | uppercase タグで satori preset ミス（=DIV= のまま） | CONFIRMED | リファレンス =type:"DIV"+ 生 STYLE= |
+| 7 | children ホール（comments/ws） | CONFIRMED | =children:[null,"hi"]= — satori は drop するのでレンダリング等価 |
+| 8 | komeiji tree → satori SVG がリファレンスとバイト等価 | CONFIRMED | test/snapshots/*.svg 4 fixture（basic/style/inline-css/tailwind） |
+| 9 | dist 成果物が node + bun で動作 | CONFIRMED | dist-check 実行ログ |
+| 10 | Bun 1.3 の =strings.raw= が astral 文字を再エスケープ | CONFIRMED | codepoints 実測 → cooked 文字列で回避 |
+| 11 | 補間セマンティクス（null/false → ""、=String()= それ以外） | CONFIRMED | リファレンス実出力と一致 |
+
+* 実装案比較と選定
+
+| 案 | 構成 | pros | cons | 判定 |
+|---|---|---|---|---|
+| A | ultrahtml + entities + style-to-js | direct 3、上流と同作者 | regex parser の未知リスク、decode 層自作、selector は bundled parsel（Bun 脆弱性の実績） | 次 |
+| **B** | **htmlparser2 + css-select + css-what + style-to-object** | **実証済み Bun 動作、全レイヤを実績ある実装に委譲、entity 解決無料、~300 行** | transitive 10（全 micro・全現役） | **採用** |
+| C | parse5 | full WHATWG | OG 画像の管理入力に対し過剰・低レベル API | 却下 |
+| D | ゼロ依存ハンドロール | 0 deps | justjshtml が示す ~9k LOC、long-tail bug 再生産リスク | 却下 |
+| E | himalaya / node-html-parser / linkedom | - | 実証で失格（配列 API / malformed 落下 / entity での text 分裂） | 却下 |
+
+- direct deps は A と B で同数（3–4）。「見かけ 1 dep だが 3 lib を bundle している」A より B の方が誠実
+- 配信後、css-select の =selectAll= がジェネリック（=<Node, ElementNode extends Node>=）であることを確認し、domhandler 型を排除 → src に構造的ノード型を定義 → 公開 .d.ts が完全自己完結型に
+
+* komeiji 設計（採用案 B）
+
+#+BEGIN_SRC text
+pipeline: fmt interpolations (cooked strings!)
+  → htmlparser2 parseDocument
+  → <style> 抽出 + rule 分離（quote/brace スキャナ、at-rule 破棄 = 上流同じ）
+  → css-select 適用（specificity 昇順 → source 順、inline attr が最終勝ち）
+  → tw ヒューリスティック（TW_NAMES 移植、satori が props.tw をネイティブ消費）
+  → walk → VNode（ルート div flex column 100%/100% で包む）
+#+END_SRC
+
+- children: ホールなし。単一 non-empty text 子 → string。satori normalizeChildren 後はレンダリング等価
+- style: style-to-object + 自前 camelize 12 行（throw → {} ガード、custom prop 保護、lowercase、React 流 vendor prefix =-webkit-*→Webkit*, -ms-*→ms*=）
+- deviations（すべてレンダリング等価または改善、テスト固定）: entity decode ON / tag・attr lowercase / ホールなし children / =--x= 保持 / =!important= 空白保持 / Bun =strings.raw= 回避
+
+* 配信後のステアリング反映
+
+1. 「satori-html を使用しているのは想定と異る」→ =satori-html= devDep 削除 + ゴールデン生成スクリプト削除。ゴールデン SVG は確定済みコミットで運用（出所は README に記録）。=domhandler= も削除し依存は 4 + dev 3
+2. HTML → SVG サンプル =examples/og-image.ts= 追加（bun run example、出力 27633 bytes 検証済み）
+3. renovate.json（hinoto 準拠）+ docs/tagpr.md（導入手順書）
+
+* ソース一覧（ranked、access 2026-09-02）
+
+** 一次ソース（opensrc ローカル読み）
+
+1. [[https://github.com/natemoo-re/satori-html][natemoo-re/satori-html@0.3.2]] — 実装本体・テスト・CHANGELOG
+2. [[https://github.com/vercel/satori][vercel/satori@0.33.4]] — jsx/utils/layout/satori.ts/handler/tailwind — 要素契約の一次裏付け
+3. [[https://github.com/natemoo-re/ultrahtml][natemoo-re/ultrahtml@1.7.0]] — parser 本体・inline transformer（Bun クラッシュ原因特定）
+
+** Web（主要）
+
+4. [[https://www.npmjs.com/package/satori-html][npm: satori-html]] / [[https://www.npmjs.com/package/satori][npm: satori]] / [[https://www.npmjs.com/package/style-to-object][npm: style-to-object]] — DL 数・バージョン・メタ
+5. [[https://github.com/vercel/satori/issues/558][vercel/satori#558]] — maintainer が HTML パースを別パッケージに委譲する旨の一次発言
+6. [[https://github.com/natemoo-re/satori-html/issues/20][satori-html#20]]（entity bug）/ [[https://github.com/natemoo-re/satori-html/issues/24][#24]]（Bun クラッシュ）/ [[https://github.com/natemoo-re/satori-html/issues/11][#11]]（style 解析）
+7. [[https://registry.npmjs.org/@xevion/satori-html][npm: @xevion/satori-html]] — 唯一の活動的 fork（url() リグレッションを実証）
+8. [[https://github.com/fb55/htmlparser2][fb55/htmlparser2]]（v12 spec-alignment PR #2387）/ [[https://github.com/fb55/css-select][fb55/css-select]] / [[https://github.com/remarkablemark/style-to-object][remarkablemark/style-to-object]]
+9. [[https://github.com/taoqf/node-html-parser][taoqf/node-html-parser]]（malformed 不可の maintainer 発言 #268/#152）/ [[https://github.com/WebReflection/linkedom][linkedom]] / [[https://github.com/andrejewski/himalaya][himalaya]] / [[https://github.com/capricorn86/happy-dom][happy-dom]]
+10. [[https://github.com/simonw/justjshtml][simonw/justjshtml]] — ゼロ依存で html5lib 準拠（ハンドロールのコスト証明、~9k LOC）
+11. [[https://github.com/cheeriojs/cheerio/issues/5410][cheerio#5410]] / [[https://github.com/sveltejs/svelte/issues/9637][svelte#9637]] — split(';') パースの失敗例
+12. [[https://github.com/harlan-zw/nuxt-og-image][nuxt-og-image]] / [[https://github.com/kvnang/workers-og][workers-og]] / [[https://github.com/jillesme/cf-workers-og][cf-workers-og]] — 実運用の HTML→satori 経路
+13. [[https://github.com/Comamoca/hinoto][Comamoca/hinoto]]（renovate 設定）/ [[https://jsr.io/@comamoca/kido][jsr.io/@comamoca/kido]] — ハウススタイル根拠
+14. [[https://html.spec.whatwg.org/multipage/parsing.html][WHATWG parsing spec]] / [[https://github.com/html5lib/html5lib-tests][html5lib-tests]] — パーサー要件の定義
+
+* コントラディクション
+
+| 争点 | 解決 |
+|---|---|
+| 「satori-html は node-html-parser 使用」という初期仮定 | REFUTED — package.json で ultrahtml と判明 |
+| librarian 報告「style-to-js は property を lowercase する」 | 実測で非対応（=COLOR= 保持）→ komeiji は自前 lowercase |
+| Xevion fork「critical bugs を修正」 | Bun 修正と引き換えに url() パースをリグレッション（実証） |
+
+* ギャップ（意図的にスコープ外）
+
+- html5lib-tests 完全準拠（OG 画像の管理された入力を想定、上流も非準拠）
+- =@media= / =@font-face= は上流と同様に無視（上流も env 未指定で破棄）
+- Bun の =strings.raw= バグの upstream 報告（oven-sh/bun）は未実施
+
+* 展開トレース
+
+| wave | 内容 | lead 数 | 結果 |
+|---|---|---|---|
+| 0 | opensrc ローカル解析（satori-html / satori / ultrahtml） | - | 実装本体解明、10 observation |
+| 1 | librarian x5（契約 / パーサー / 先行例 / style / 足場） | 14 leads | 8 即 close、4 を実証へ遅延、2 保留 |
+| 2 | 実証 shootout（bun/node で 7 パーサー + 2 スタイル変換 + satori レンダリング） | 全遅延 lead 解決 | 収束（未調査 lead ゼロ、3 軸で交差確認） |
+
+- スティアリング 3 件（Bun ランタイム指定 / satori-html 依存排除 / example・renovate・tagpr）すべてジャーナル記録済み

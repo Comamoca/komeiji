@@ -1,0 +1,56 @@
+{
+  "name": "komeiji",
+  "version": "0.1.0",
+  "description": "Generate a satori-friendly VDOM from a string of HTML. Modern, Bun-ready successor of satori-html.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "example": "bun examples/og-image.ts",
+    "prepublishOnly": "bun run build"
+  },
+  "keywords": [
+    "satori",
+    "html",
+    "og-image",
+    "vdom",
+    "jsx"
+  ],
+  "author": {
+    "name": "Comamoca",
+    "url": "https://github.com/Comamoca"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Comamoca/komeiji"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "css-select": "^5.2.0",
+    "css-what": "^7.0.0",
+    "htmlparser2": "^12.0.0",
+    "style-to-object": "^2.0.2"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.0",
+    "satori": "^0.33.4",
+    "typescript": "^5.9.2"
+  }
+}

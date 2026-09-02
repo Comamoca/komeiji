@@ -1,0 +1,7 @@
+node_modules/
+dist/
+examples/output.svg
+*.tsbuildinfo
+.DS_Store
+.omo/
+.direnv/
