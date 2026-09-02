@@ -119,9 +119,11 @@ jobs:
 - renovate が作る依存更新 PR は `dependabot[bot]` ではないため、**`major` / `minor` label が付いていると tagpr のバージョン提案に反映される**（dependabot 限定の除外）。renovate 側で label を付けていないなら patch 扱いで問題なし
 - renovate の依存更新は通常 patch 扱い。破壊的更新を major として出したい場合はリリース PR に `tagpr:major` を手動で付けるか、version ファイルを編集する
 
-## 初回リリースの注意
+## 初回リリースの実際（検証済み 2026-09-03）
 
-tagpr はタグ履歴を起点にする（タグが無い場合は `v0.0.0` 扱い）。`package.json` の `version: 0.1.0` とは独立に **v0.0.1 が提案される**。v0.1.0 から始めたい場合はリリース PR 内で `package.json` の version を `0.1.0` に編集してマージする（version ファイル編集が最優先のルール）。
+タグ履歴がない初回は `v0.0.0` が起点になるが、**`package.json` の既存 `version`（0.1.0）が尊重され「Release for v0.1.0」の PR が自動作成された**（version ファイルの値が優先）。PR には `.github/release.yml` と `CHANGELOG.md` の初回生成も含まれる。→ そのままマージすれば v0.1.0 タグ + GitHub Release + npm publish が実行される。
+
+なお manifest に version を書かない運用にする場合は `versionFile = -` でタグのみ管理も可能。
 
 ## 運用メモ
 
