@@ -1,6 +1,6 @@
 {
   "name": "@comamoca/komeiji",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Generate a satori-friendly VDOM from a string of HTML. Modern, Bun-ready successor of satori-html.",
   "type": "module",
   "main": "./dist/index.js",
