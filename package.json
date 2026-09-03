@@ -1,5 +1,5 @@
 {
-  "name": "komeiji",
+  "name": "@comamoca/komeiji",
   "version": "0.1.0",
   "description": "Generate a satori-friendly VDOM from a string of HTML. Modern, Bun-ready successor of satori-html.",
   "type": "module",
